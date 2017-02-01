@@ -1,20 +1,6 @@
-/**
- * Copyright Google Inc. All Rights Reserved.
- * <p/>
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- * <p/>
- * http://www.apache.org/licenses/LICENSE-2.0
- * <p/>
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
 package com.google.firebase.udacity.friendlychat;
 
+import android.content.Intent;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
 import android.support.v7.app.AppCompatActivity;
@@ -50,6 +36,7 @@ public class MainActivity extends AppCompatActivity {
 
     public static final String ANONYMOUS = "anonymous";
     public static final int DEFAULT_MSG_LENGTH_LIMIT = 1000;
+
     public static final int RC_SIGN_IN = 1;
 
     private ListView mMessageListView;
@@ -62,11 +49,11 @@ public class MainActivity extends AppCompatActivity {
     private String mUsername;
 
     //Variables instanciadas de Firebase
-    private FirebaseDatabase miFirebaseBBDD;
-    private DatabaseReference miBBDDReferencia;
-    private ChildEventListener miEscuchador;
-    private FirebaseAuth miFirebaseAutenticacion;
-    private FirebaseAuth.AuthStateListener miEscuchadorAutenticacion;
+    private FirebaseDatabase mFirebaseDatabase;
+    private DatabaseReference mMessagesDatabaseReference;
+    private ChildEventListener mChildEventListener;
+    private FirebaseAuth mFirebaseAuth;
+    private FirebaseAuth.AuthStateListener mAuthStateListener;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -76,10 +63,10 @@ public class MainActivity extends AppCompatActivity {
         mUsername = ANONYMOUS;
 
         //Inicializar componentes de Firebase
-        miFirebaseBBDD=FirebaseDatabase.getInstance();
-        miBBDDReferencia =miFirebaseBBDD.getReference().child("messages");
-        miFirebaseAutenticacion= FirebaseAuth.getInstance();
+        mFirebaseDatabase = FirebaseDatabase.getInstance();
+        mFirebaseAuth = FirebaseAuth.getInstance();
 
+        mMessagesDatabaseReference = mFirebaseDatabase.getReference().child("messages");
 
         // Initialize references to views
         mProgressBar = (ProgressBar) findViewById(R.id.progressBar);
@@ -89,7 +76,7 @@ public class MainActivity extends AppCompatActivity {
         mSendButton = (Button) findViewById(R.id.sendButton);
 
         // Initialize message ListView and its adapter
-        final List<FriendlyMessage> friendlyMessages = new ArrayList<>();
+        List<FriendlyMessage> friendlyMessages = new ArrayList<>();
         mMessageAdapter = new MessageAdapter(this, R.layout.item_message, friendlyMessages);
         mMessageListView.setAdapter(mMessageAdapter);
 
@@ -129,41 +116,67 @@ public class MainActivity extends AppCompatActivity {
         mSendButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                // TODO: Send messages on click
-
                 FriendlyMessage friendlyMessage = new FriendlyMessage(mMessageEditText.getText().toString(), mUsername, null);
-                miBBDDReferencia.push().setValue(friendlyMessage);
+                mMessagesDatabaseReference.push().setValue(friendlyMessage);
 
                 // Clear input box
                 mMessageEditText.setText("");
             }
         });
 
-        miEscuchadorAutenticacion = new FirebaseAuth.AuthStateListener() {
+        mAuthStateListener = new FirebaseAuth.AuthStateListener() {
             @Override
             public void onAuthStateChanged(@NonNull FirebaseAuth firebaseAuth) {
-                FirebaseUser usuario= firebaseAuth.getCurrentUser();
-
-                    if (usuario != null){
-                        //Valores a tomar cuando el usuario esté logueado
-                        onSignedInInitialize(usuario.getDisplayName());
-                    }
-                    else {
-                        onSignedOutCleanup();
-                        //Valores si el usuario no está logueado
-                            startActivityForResult(
-                                    AuthUI.getInstance()
-                                        .createSignInIntentBuilder()
-                                        .setIsSmartLockEnabled(false)
-                                        .setProviders(
-                                                AuthUI.EMAIL_PROVIDER,
-                                                AuthUI.GOOGLE_PROVIDER)
-                                        .build(),
-                                    RC_SIGN_IN);
-                    }
-
+                FirebaseUser user = firebaseAuth.getCurrentUser();
+                if (user != null) {
+                    //Valores a tomar cuando el usuario esté logueado
+                    onSignedInInitialize(user.getDisplayName());
+                } else {
+                    //Valores si el usuario no está logueado
+                    onSignedOutCleanup();
+                    startActivityForResult(
+                            AuthUI.getInstance()
+                                    .createSignInIntentBuilder()
+                                    .setIsSmartLockEnabled(false)
+                                    .setProviders(
+                                            AuthUI.EMAIL_PROVIDER,
+                                            AuthUI.GOOGLE_PROVIDER)
+                                    .build(),
+                            RC_SIGN_IN);
+                }
             }
         };
+    }
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == RC_SIGN_IN) {
+            if (resultCode == RESULT_OK) {
+                //Login correcto, configuramos la UI
+                Toast.makeText(this, "Signed in!", Toast.LENGTH_SHORT).show();
+            } else if (resultCode == RESULT_CANCELED) {
+                // Logueo cancelado por el usuario, finalizamos la actividad
+                Toast.makeText(this, "Sign in canceled", Toast.LENGTH_SHORT).show();
+                finish();
+            }
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        mFirebaseAuth.addAuthStateListener(mAuthStateListener);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (mAuthStateListener != null) {
+            mFirebaseAuth.removeAuthStateListener(mAuthStateListener);
+        }
+        mMessageAdapter.clear();
+        detachDatabaseReadListener();
     }
 
     @Override
@@ -175,65 +188,48 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        return super.onOptionsItemSelected(item);
+        switch (item.getItemId()) {
+            case R.id.sign_out_menu:
+                AuthUI.getInstance().signOut(this);
+                return true;
+            default:
+                return super.onOptionsItemSelected(item);
+        }
     }
 
-    private void onSignedInInitialize (String username){
+    private void onSignedInInitialize(String username) {
         mUsername = username;
         attachDatabaseReadListener();
     }
 
-    private void onSignedOutCleanup(){
+    private void onSignedOutCleanup() {
         mUsername = ANONYMOUS;
         mMessageAdapter.clear();
         detachDatabaseReadListener();
     }
 
-    private void attachDatabaseReadListener(){
-        if (miEscuchador == null) {
-            miEscuchador = new ChildEventListener() {
+    private void attachDatabaseReadListener() {
+        if (mChildEventListener == null) {
+            mChildEventListener = new ChildEventListener() {
                 @Override
                 public void onChildAdded(DataSnapshot dataSnapshot, String s) {
                     FriendlyMessage friendlyMessage = dataSnapshot.getValue(FriendlyMessage.class);
                     mMessageAdapter.add(friendlyMessage);
                 }
 
-                public void onChildChanged(DataSnapshot dataSnapshot, String s) {
-                }
-
-                public void onChildRemoved(DataSnapshot dataSnapshot) {
-                }
-
-                public void onChildMoved(DataSnapshot dataSnapshot, String s) {
-                }
-
-                public void onCancelled(DatabaseError databaseError) {
-                }
+                public void onChildChanged(DataSnapshot dataSnapshot, String s) {}
+                public void onChildRemoved(DataSnapshot dataSnapshot) {}
+                public void onChildMoved(DataSnapshot dataSnapshot, String s) {}
+                public void onCancelled(DatabaseError databaseError) {}
             };
-            miBBDDReferencia.addChildEventListener(miEscuchador);
+            mMessagesDatabaseReference.addChildEventListener(mChildEventListener);
         }
     }
 
-    private void detachDatabaseReadListener (){
-        if (miEscuchador != null) {
-            miBBDDReferencia.removeEventListener(miEscuchador);
-            miEscuchador = null;
+    private void detachDatabaseReadListener() {
+        if (mChildEventListener != null) {
+            mMessagesDatabaseReference.removeEventListener(mChildEventListener);
+            mChildEventListener = null;
         }
-    }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        if (miEscuchadorAutenticacion !=null ) {
-            miFirebaseAutenticacion.removeAuthStateListener(miEscuchadorAutenticacion);
-        }
-        detachDatabaseReadListener();
-        mMessageAdapter.clear();
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        miFirebaseAutenticacion.addAuthStateListener(miEscuchadorAutenticacion);
     }
 }
